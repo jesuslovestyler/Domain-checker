@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Domain Checker</title>
+<style>
+  :root { --green:#2e7d32; --red:#c62828; --ink:#223; --muted:#6b7280; }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:linear-gradient(160deg,#e8f5e9,#f1f8e9); color:var(--ink); padding:24px;
+  }
+  .card {
+    background:#fff; border-radius:20px; padding:32px 28px; max-width:520px; width:100%;
+    box-shadow:0 12px 40px rgba(46,125,50,.15); text-align:center;
+  }
+  h1 { margin:0 0 6px; font-size:28px; }
+  p.sub { margin:0 0 20px; color:var(--muted); font-size:14px; }
+  .row { display:flex; gap:10px; }
+  input {
+    flex:1; font-size:17px; padding:13px 15px; border:2px solid #c8e6c9; border-radius:12px;
+    outline:none; min-width:0;
+  }
+  input:focus { border-color:var(--green); }
+  button {
+    font-size:17px; font-weight:700; padding:13px 22px; border:0; border-radius:12px;
+    background:var(--green); color:#fff; cursor:pointer; white-space:nowrap;
+  }
+  button:disabled { opacity:.6; cursor:wait; }
+  .result { margin-top:22px; min-height:90px; text-align:left; }
+  .badge {
+    display:inline-block; font-weight:800; font-size:15px; padding:6px 14px; border-radius:999px;
+    margin-bottom:10px;
+  }
+  .free  { background:#e8f5e9; color:var(--green); }
+  .taken { background:#ffebee; color:var(--red); }
+  .warn  { background:#fff8e1; color:#8d6e00; }
+  .detail { font-size:14px; color:var(--muted); margin:4px 0; }
+  .detail b { color:var(--ink); }
+  .domain { font-size:20px; font-weight:800; word-break:break-all; }
+  .hint { font-size:13px; color:var(--muted); margin-top:16px; }
+  .spinner {
+    display:inline-block; width:18px; height:18px; border:3px solid #c8e6c9;
+    border-top-color:var(--green); border-radius:50%; animation:spin 0.8s linear infinite;
+    vertical-align:-3px; margin-right:8px;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔍 Domain Checker</h1>
+    <p class="sub">Live lookup — type a name or a full domain.</p>
+    <div class="row">
+      <input id="q" type="text" placeholder="berrybrigade  or  berrybrigade.com"
+             autocapitalize="off" autocomplete="off" spellcheck="false" enterkeyhint="go">
+      <button id="go">Check</button>
+    </div>
+    <div class="result" id="result"></div>
+    <p class="hint">Tip: a bare name checks its .com. Results come straight from the domain registry.</p>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const result = $('result'), go = $('go'), q = $('q');
+
+function setBusy(busy) {
+  go.disabled = busy;
+  go.textContent = busy ? 'Checking…' : 'Check';
+}
+
+function show(html) { result.innerHTML = html; }
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function normalize(raw) {
+  let d = raw.trim().toLowerCase();
+  d = d.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].split('?')[0];
+  if (!d) return null;
+  if (!d.includes('.')) d += '.com';
+  if (!/^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(d)) return null;
+  return d;
+}
+
+function pickEvent(events, action) {
+  if (!Array.isArray(events)) return null;
+  const e = events.find(e => e.eventAction === action);
+  return e ? e.eventDate : null;
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return isNaN(d) ? '—' : d.toLocaleDateString(undefined, {year:'numeric', month:'short', day:'numeric'});
+}
+
+function registrarOf(data) {
+  const ent = (data.entities || []).find(e => (e.roles || []).includes('registrar'));
+  if (!ent || !Array.isArray(ent.vcardArray)) return '—';
+  const fn = ent.vcardArray[1].find(p => p[0] === 'fn');
+  return fn ? fn[3] : '—';
+}
+
+async function check() {
+  const domain = normalize(q.value);
+  if (!domain) {
+    show('<span class="badge warn">Hmm</span><div class="detail">That doesn\'t look like a domain name. Try something like <b>berrybrigade</b>.</div>');
+    return;
+  }
+  setBusy(true);
+  show('<div class="detail"><span class="spinner"></span>Asking the registry about <b>' + esc(domain) + '</b>…</div>');
+  try {
+    const res = await fetch('https://rdap.org/domain/' + encodeURIComponent(domain));
+    if (res.status === 404) {
+      show('<div class="domain">' + esc(domain) + '</div>' +
+           '<span class="badge free">Available ✓</span>' +
+           '<div class="detail">Nobody has registered this one. If you love it, grab it soon.</div>');
+    } else if (res.ok) {
+      const data = await res.json();
+      const reg = registrarOf(data);
+      const created = fmtDate(pickEvent(data.events, 'creation'));
+      const expires = fmtDate(pickEvent(data.events, 'expiration'));
+      show('<div class="domain">' + esc(data.ldhName || domain) + '</div>' +
+           '<span class="badge taken">Taken</span>' +
+           '<div class="detail">Registrar: <b>' + esc(reg) + '</b></div>' +
+           '<div class="detail">Registered: <b>' + esc(created) + '</b></div>' +
+           '<div class="detail">Expires: <b>' + esc(expires) + '</b></div>');
+    } else {
+      show('<span class="badge warn">Uncertain</span>' +
+           '<div class="detail">The registry didn\'t give a clear answer (status ' + res.status + '). Try again in a moment.</div>');
+    }
+  } catch (err) {
+    show('<span class="badge warn">Couldn\'t reach the registry</span>' +
+         '<div class="detail">Check your connection and try again.</div>');
+  } finally {
+    setBusy(false);
+  }
+}
+
+go.addEventListener('click', check);
+q.addEventListener('keydown', e => { if (e.key === 'Enter') check(); });
+</script>
+</body>
+</html>
